@@ -145,10 +145,25 @@ function Chip({ label, active, onClick }) {
   );
 }
 
-function HomeScreen({ onNavigate, meetings, onRemove, onSelectMeeting }) {
+function HomeScreen({ onNavigate, meetings, onRemove, onSelectMeeting, userName, onSetUserName }) {
   const [filter, setFilter] = useState("all");
   const [pendingCancel, setPendingCancel] = useState(null);
+  const [nameInput, setNameInput] = useState("");
   const filtered = filter === "all" ? meetings : filter === "confirmed" ? meetings.filter(m => m.status === "confirmed") : meetings.filter(m => m.status === "voting");
+
+  if (!userName) {
+    return (
+      <div className="fade-in" style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:"32px 24px", textAlign:"center" }}>
+        <div style={{ fontSize:"56px", marginBottom:"20px" }}>👋</div>
+        <h2 style={{ fontSize:"22px", fontWeight:800, color:"var(--text-primary)", margin:"0 0 8px" }}>안녕하세요!</h2>
+        <p style={{ fontSize:"14px", color:"var(--text-secondary)", margin:"0 0 28px" }}>시작하기 전에 이름을 알려주세요</p>
+        <input value={nameInput} onChange={e => setNameInput(e.target.value)} placeholder="이름 입력" style={{ width:"100%", padding:"14px 16px", fontSize:"16px", border:"2px solid var(--border)", borderRadius:"12px", background:"var(--bg-secondary)", color:"var(--text-primary)", fontFamily:"inherit", marginBottom:"12px", textAlign:"center" }} />
+        <button onClick={() => { if(nameInput.trim()) onSetUserName(nameInput.trim()); }} style={{ width:"100%", padding:"16px", background: nameInput.trim() ? "var(--accent)" : "var(--bg-secondary)", color: nameInput.trim() ? "#fff" : "var(--text-tertiary)", border:"none", borderRadius:"14px", fontSize:"16px", fontWeight:700, cursor:"pointer" }}>
+          시작하기
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="fade-in" style={{ flex:1, overflowY:"auto" }}>
@@ -156,7 +171,7 @@ function HomeScreen({ onNavigate, meetings, onRemove, onSelectMeeting }) {
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-end" }}>
           <div>
             <p style={{ fontSize:"14px", color:"var(--text-secondary)", margin:0 }}>안녕하세요 👋</p>
-            <h1 style={{ fontSize:"26px", fontWeight:800, color:"var(--text-primary)", margin:"4px 0 0", letterSpacing:"-0.5px" }}>민지님의 약속</h1>
+            <h1 style={{ fontSize:"26px", fontWeight:800, color:"var(--text-primary)", margin:"4px 0 0", letterSpacing:"-0.5px" }}>{userName}님의 약속</h1>
           </div>
           <div style={{ width:"40px", height:"40px", borderRadius:"50%", background:"linear-gradient(135deg, #FF6B4A, #FF3CAC)", display:"flex", alignItems:"center", justifyContent:"center", color:"#fff", fontSize:"16px", fontWeight:700 }}>민</div>
         </div>
@@ -311,15 +326,17 @@ function LinkJoinScreen({ onNavigate, meeting, onSetUserName }) {
         </div>
         <input value={name} onChange={e => setName(e.target.value)} placeholder="이름을 입력해주세요" style={{ width:"100%", padding:"14px 16px", fontSize:"15px", border:"2px solid var(--border)", borderRadius:"12px", background:"var(--bg-secondary)", color:"var(--text-primary)", fontFamily:"inherit", marginBottom:"16px" }} />
         <button onClick={async () => {
-          if(name && meeting) {
+          if(name) {
+            onSetUserName(name);
             const db = window.db;
-            if (db) {
+            if (db && meeting) {
               const members = meeting.members || [];
               if (!members.includes(name)) {
-                await db.collection("meetings").doc(meeting.id).update({ members: [...members, name] });
+                await db.collection("meetings").doc(meeting.id).update({
+                  members: firebase.firestore.FieldValue.arrayUnion(name)
+                });
               }
             }
-            onSetUserName(name);
             onNavigate(SCREENS.DATE_SELECT);
           }
         }} style={{ width:"100%", padding:"16px", background: name ? "var(--accent)" : "var(--bg-secondary)", color: name ? "#fff" : "var(--text-tertiary)", border:"none", borderRadius:"14px", fontSize:"16px", fontWeight:700, cursor: name ? "pointer" : "default", transition:"all 0.2s" }}>
@@ -855,184 +872,204 @@ const PLACE_DB = [
 const SUB_FILTERS = { "식당":["전체","한식","중식","일식","양식"] };
 
 function PlaceSelectScreen({ onNavigate, candidates, setCandidates, placeVotes, setPlaceVotes, onConfirmPlace, isEditing }) {
-  const [query, setQuery] = useState("");
-  const [mainCat, setMainCat] = useState("전체");
-  const [subCat, setSubCat] = useState("전체");
+  const KAKAO_KEY = "5ca31923d00be258137c726a342bb8e6";
+  const EMOJI_MAP = { "FD6":"🍽️", "CE7":"☕", "default":"📍" };
+  const BAR_KEYWORDS = ["술집","호프","포차","바","주점","이자카야","펍"];
+  const AREAS = ["홍대·합정","강남·역삼","성수·건대","이태원·한남","신촌·연대","종로·을지로","잠실·송파","압구정·청담","여의도","망원·연남","혜화·대학로","신림·관악"];
+  const CATS = [
+    { label:"🍽️ 식당", code:"FD6", bar:false },
+    { label:"☕ 카페", code:"CE7", bar:false },
+    { label:"🍺 술집", code:"FD6", bar:true },
+  ];
+
+  const [area, setArea] = useState(null);
+  const [cat, setCat] = useState(null);
+  const [searchResults, setSearchResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState(null);
+  const [candidateData, setCandidateData] = useState({});
   const [selectedPlace, setSelectedPlace] = useState(null);
+  const [view, setView] = useState("home"); // "home" | "browse" | "candidates"
 
-  const isSearchMode = query.length > 0;
+  useEffect(() => {
+    if (!area || !cat) return;
+    const load = async () => {
+      setSearching(true);
+      setSearchError(null);
+      try {
+        const queryMap = { "🍽️ 식당": `${area} 맛집`, "☕ 카페": `${area} 카페`, "🍺 술집": `${area} 술집` };
+        const q = queryMap[cat.label] || area;
+        const res = await fetch(
+          `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(q)}&size=45&category_group_code=${cat.code}`,
+          { headers: { Authorization: `KakaoAK ${KAKAO_KEY}` } }
+        );
+        const data = await res.json();
+        let results = data.documents || [];
+        if (cat.bar) results = results.filter(p => BAR_KEYWORDS.some(k => p.category_name.includes(k)));
+        setSearchResults(results);
+      } catch(e) { console.error(e); setSearchResults([]); setSearchError(e.message || "알 수 없는 오류"); }
+      setSearching(false);
+    };
+    load();
+  }, [area, cat]);
 
-  const toggleCandidate = (id) => setCandidates(prev => {
-    const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next;
-  });
+  const toggleCandidate = (place) => {
+    const id = place.id;
+    setCandidates(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) { next.delete(id); } else { next.add(id); setCandidateData(d => ({ ...d, [id]: place })); }
+      return next;
+    });
+  };
   const toggleVote = (id) => setPlaceVotes(prev => {
     const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next;
   });
-
-  const MOCK_VOTES = { 1:2, 7:1, 10:3 };
-  const totalVotes = (id) => (MOCK_VOTES[id] || 0) + (placeVotes.has(id) ? 1 : 0);
-
-  const candidateList = PLACE_DB.filter(p => candidates.has(p.id))
+  const totalVotes = (id) => placeVotes.has(id) ? 1 : 0;
+  const candidateList = [...candidates].map(id => candidateData[id]).filter(Boolean)
     .sort((a, b) => totalVotes(b.id) - totalVotes(a.id));
 
-  const searchResults = PLACE_DB.filter(p => {
-    const q = query.toLowerCase();
-    return (p.name.includes(q) || p.sub.includes(q) || p.tags.some(t => t.includes(q)))
-      && (mainCat === "전체" || p.category === mainCat)
-      && (!SUB_FILTERS[mainCat] || subCat === "전체" || p.sub === subCat);
-  });
+  const PlaceCard = ({ p, showAdd }) => {
+    const isC = candidates.has(p.id);
+    const isVoted = placeVotes.has(p.id);
+    const vCount = totalVotes(p.id);
+    const isPicked = selectedPlace === p.id;
+    const emoji = EMOJI_MAP[p.category_group_code] || EMOJI_MAP.default;
+    return (
+      <div style={{ background:"var(--bg-card)", borderRadius:"14px", border: isPicked ? "2px solid #7C5CFC" : isC ? "1.5px solid var(--accent)" : "1px solid var(--border)", padding:"14px", marginBottom:"10px" }}>
+        <div style={{ display:"flex", gap:"12px", alignItems:"center" }}>
+          <div style={{ width:"44px", height:"44px", borderRadius:"10px", background:"var(--bg-secondary)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"22px", flexShrink:0 }}>{emoji}</div>
+          <div style={{ flex:1, minWidth:0 }}>
+            <h4 style={{ fontSize:"14px", fontWeight:700, color:"var(--text-primary)", margin:"0 0 2px" }}>{p.place_name}</h4>
+            <p style={{ fontSize:"11px", color:"var(--text-secondary)", margin:"0 0 2px" }}>{p.category_group_name}</p>
+            <p style={{ fontSize:"10px", color:"var(--text-tertiary)", margin:0 }}>{p.road_address_name || p.address_name}</p>
+          </div>
+        </div>
+        {showAdd ? (
+          <button onClick={() => toggleCandidate(p)} style={{ width:"100%", marginTop:"10px", padding:"8px", borderRadius:"8px", border:"none", background: isC ? "var(--accent)" : "var(--bg-secondary)", color: isC ? "#fff" : "var(--text-secondary)", fontSize:"13px", fontWeight:700, cursor:"pointer" }}>
+            {isC ? "후보 등록됨 ✓" : "후보로 등록하기"}
+          </button>
+        ) : (
+          <div style={{ display:"flex", gap:"8px", marginTop:"10px" }}>
+            <button onClick={() => toggleVote(p.id)} style={{ flex:1, padding:"9px", borderRadius:"9px", border:"none", background: isVoted ? "var(--accent)" : "var(--bg-secondary)", color: isVoted ? "#fff" : "var(--text-secondary)", fontSize:"12px", fontWeight:700, cursor:"pointer" }}>
+              {isVoted ? `✓ 투표함 (${vCount})` : `투표하기 (${vCount})`}
+            </button>
+            <button onClick={() => setSelectedPlace(isPicked ? null : p.id)} style={{ flex:1, padding:"9px", borderRadius:"9px", border: isPicked ? "none" : "1.5px solid #7C5CFC", background: isPicked ? "#7C5CFC" : "transparent", color: isPicked ? "#fff" : "#7C5CFC", fontSize:"12px", fontWeight:700, cursor:"pointer" }}>
+              {isPicked ? "선택 해제" : "이 곳으로 확정"}
+            </button>
+            <button onClick={() => toggleCandidate(p)} style={{ padding:"9px 10px", borderRadius:"9px", border:"none", background:"var(--bg-secondary)", color:"var(--text-tertiary)", fontSize:"11px", fontWeight:600, cursor:"pointer" }}>제거</button>
+          </div>
+        )}
+      </div>
+    );
+  };
 
+  // 탐색 화면
+  if (view === "browse") {
+    return (
+      <div className="fade-in" style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden" }}>
+        <Header title="장소 탐색" onBack={() => { setView("home"); setArea(null); setCat(null); setSearchResults([]); }} />
+        <div style={{ padding:"0 20px 10px", flexShrink:0 }}>
+          {/* 지역 선택 */}
+          <p style={{ fontSize:"12px", fontWeight:700, color:"var(--text-secondary)", margin:"0 0 8px" }}>지역</p>
+          <div style={{ display:"flex", gap:"6px", overflowX:"auto", paddingBottom:"4px", marginBottom:"12px" }}>
+            {AREAS.map(a => (
+              <button key={a} onClick={() => setArea(a)} style={{ flexShrink:0, padding:"7px 14px", borderRadius:"20px", border:"none", background: area===a ? "var(--text-primary)" : "var(--bg-secondary)", color: area===a ? "#fff" : "var(--text-secondary)", fontSize:"12px", fontWeight:600, cursor:"pointer" }}>{a}</button>
+            ))}
+          </div>
+          {/* 카테고리 선택 */}
+          <p style={{ fontSize:"12px", fontWeight:700, color:"var(--text-secondary)", margin:"0 0 8px" }}>카테고리</p>
+          <div style={{ display:"flex", gap:"8px", marginBottom:"4px" }}>
+            {CATS.map(c => (
+              <button key={c.label} onClick={() => setCat(c)} style={{ flex:1, padding:"10px", borderRadius:"12px", border:"none", background: cat?.label===c.label ? "var(--accent)" : "var(--bg-secondary)", color: cat?.label===c.label ? "#fff" : "var(--text-secondary)", fontSize:"13px", fontWeight:700, cursor:"pointer" }}>{c.label}</button>
+            ))}
+          </div>
+        </div>
+        <div style={{ flex:1, overflowY:"auto", padding:"0 20px 20px" }}>
+          {!area || !cat ? (
+            <div style={{ textAlign:"center", padding:"48px 0", color:"var(--text-tertiary)" }}>
+              <div style={{ fontSize:"36px", marginBottom:"12px" }}>🗺️</div>
+              <p style={{ fontSize:"14px", fontWeight:600 }}>지역과 카테고리를 선택해주세요</p>
+            </div>
+          ) : searching ? (
+            <div style={{ textAlign:"center", padding:"40px 0" }}>
+              <div style={{ width:"32px", height:"32px", borderRadius:"50%", border:"3px solid var(--bg-secondary)", borderTopColor:"var(--accent)", animation:"spin 1s linear infinite", margin:"0 auto 12px" }} />
+              <p style={{ fontSize:"13px", color:"var(--text-secondary)" }}>{area} {cat.label} 불러오는 중...</p>
+            </div>
+          ) : searchError ? (
+            <div style={{ textAlign:"center", padding:"40px 0" }}>
+              <div style={{ fontSize:"32px", marginBottom:"12px" }}>⚠️</div>
+              <p style={{ fontSize:"13px", color:"#FF3B30", fontWeight:600, marginBottom:"6px" }}>카카오 API 오류</p>
+              <p style={{ fontSize:"11px", color:"var(--text-tertiary)" }}>{searchError}</p>
+              <p style={{ fontSize:"11px", color:"var(--text-tertiary)", marginTop:"8px" }}>카카오 개발자 콘솔에서 도메인 등록이 필요할 수 있어요</p>
+            </div>
+          ) : (
+            <>
+              <p style={{ fontSize:"12px", fontWeight:700, color:"var(--text-secondary)", margin:"0 0 10px" }}>{area} · {searchResults.length}곳</p>
+              {searchResults.length === 0
+                ? <div style={{ textAlign:"center", padding:"40px 0", color:"var(--text-tertiary)" }}>결과가 없어요</div>
+                : searchResults.map(p => <PlaceCard key={p.id} p={p} showAdd={true} />)
+              }
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // 홈 화면 (후보 목록)
   return (
     <div className="fade-in" style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden" }}>
-      <Header title="장소 정하기" subtitle="대학 동기 모임" onBack={() => onNavigate(isEditing ? SCREENS.DETAIL : SCREENS.TIME_RESULT)} />
-
-      <div style={{ padding:"0 20px 10px", flexShrink:0 }}>
-        {/* 중간지점 추천 */}
-        {!isSearchMode && (
-          <button onClick={() => onNavigate(SCREENS.PLACE_RECOMMEND)} style={{ width:"100%", padding:"12px 16px", background:"var(--bg-card)", border:"1.5px dashed var(--accent)", borderRadius:"14px", cursor:"pointer", display:"flex", alignItems:"center", gap:"12px", marginBottom:"10px", textAlign:"left" }}>
-            <div style={{ width:"36px", height:"36px", borderRadius:"10px", background:"linear-gradient(135deg, rgba(255,107,74,0.15), rgba(124,92,252,0.15))", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"18px" }}>📍</div>
-            <div style={{ flex:1 }}>
-              <div style={{ fontSize:"13px", fontWeight:700, color:"var(--accent)" }}>중간지점 추천받기</div>
-              <div style={{ fontSize:"11px", color:"var(--text-secondary)", marginTop:"1px" }}>모두에게 공정한 만남 장소</div>
-            </div>
-            <span style={{ color:"var(--accent)" }}>→</span>
-          </button>
-        )}
-
-        {/* 검색 바 */}
-        <div style={{ display:"flex", alignItems:"center", gap:"8px", background:"var(--bg-secondary)", borderRadius:"12px", padding:"10px 14px" }}>
-          <span style={{ fontSize:"15px", color:"var(--text-tertiary)" }}>🔍</span>
-          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="장소 검색해서 후보 추가하기" style={{ flex:1, background:"none", border:"none", outline:"none", fontSize:"14px", color:"var(--text-primary)", fontFamily:"inherit" }} />
-          {query && <button onClick={() => setQuery("")} style={{ background:"none", border:"none", cursor:"pointer", color:"var(--text-tertiary)", fontSize:"15px", lineHeight:1 }}>✕</button>}
-        </div>
-
-        {/* 검색 모드 필터 */}
-        {isSearchMode && (
-          <div style={{ marginTop:"8px" }}>
-            <div style={{ display:"flex", gap:"6px", marginBottom: SUB_FILTERS[mainCat] ? "6px" : "0" }}>
-              {["전체","식당","카페","술집"].map(cat => (
-                <button key={cat} onClick={() => { setMainCat(cat); setSubCat("전체"); }} style={{ flexShrink:0, padding:"6px 12px", borderRadius:"20px", border:"none", background: mainCat===cat ? "var(--accent)" : "var(--bg-secondary)", color: mainCat===cat ? "#fff" : "var(--text-secondary)", fontSize:"12px", fontWeight:600, cursor:"pointer" }}>{cat}</button>
-              ))}
-            </div>
-            {SUB_FILTERS[mainCat] && (
-              <div style={{ display:"flex", gap:"6px", overflowX:"auto" }}>
-                {SUB_FILTERS[mainCat].map(s => (
-                  <button key={s} onClick={() => setSubCat(s)} style={{ flexShrink:0, padding:"4px 10px", borderRadius:"14px", border: subCat===s ? "none" : "1px solid var(--border)", background: subCat===s ? "var(--text-primary)" : "var(--bg-card)", color: subCat===s ? "#fff" : "var(--text-secondary)", fontSize:"11px", fontWeight:600, cursor:"pointer" }}>{s}</button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
+      <Header title="장소 정하기" onBack={() => onNavigate(isEditing ? SCREENS.DETAIL : SCREENS.TIME_RESULT)} />
       <div style={{ flex:1, overflowY:"auto", padding:"0 20px" }}>
-        {isSearchMode ? (
-          /* ── 검색 결과 뷰 ── */
-          <div style={{ paddingBottom:"20px" }}>
-            <p style={{ fontSize:"12px", fontWeight:700, color:"var(--text-secondary)", margin:"0 0 10px" }}>{searchResults.length}곳</p>
-            {searchResults.length === 0
-              ? <div style={{ textAlign:"center", padding:"40px 0", color:"var(--text-tertiary)" }}>검색 결과가 없어요</div>
-              : searchResults.map(p => {
-                const isC = candidates.has(p.id);
-                return (
-                  <div key={p.id} style={{ background:"var(--bg-card)", borderRadius:"14px", border: isC ? "1.5px solid var(--accent)" : "1px solid var(--border)", padding:"14px", marginBottom:"10px" }}>
-                    <div style={{ display:"flex", gap:"12px", alignItems:"center" }}>
-                      <div style={{ width:"44px", height:"44px", borderRadius:"10px", background:"var(--bg-secondary)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"22px", flexShrink:0 }}>{p.emoji}</div>
-                      <div style={{ flex:1, minWidth:0 }}>
-                        <div style={{ display:"flex", justifyContent:"space-between" }}>
-                          <h4 style={{ fontSize:"14px", fontWeight:700, color:"var(--text-primary)", margin:0 }}>{p.name}</h4>
-                          <span style={{ color:"#FFB800", fontSize:"12px", fontWeight:700 }}>★ {p.rating}</span>
-                        </div>
-                        <p style={{ fontSize:"11px", color:"var(--text-secondary)", margin:"2px 0 5px" }}>{p.sub} · {p.price} · {p.dist}</p>
-                        <div style={{ display:"flex", gap:"4px", flexWrap:"wrap" }}>
-                          {p.tags.map(t => <span key={t} style={{ padding:"2px 6px", borderRadius:"5px", background:"var(--bg-secondary)", fontSize:"10px", color:"var(--text-tertiary)", fontWeight:600 }}>{t}</span>)}
-                        </div>
-                      </div>
-                    </div>
-                    <button onClick={() => toggleCandidate(p.id)} style={{ width:"100%", marginTop:"10px", padding:"8px", borderRadius:"8px", border:"none", background: isC ? "var(--accent)" : "var(--bg-secondary)", color: isC ? "#fff" : "var(--text-secondary)", fontSize:"13px", fontWeight:700, cursor:"pointer" }}>
-                      {isC ? "후보 등록됨 ✓  ·  제거하기" : "후보로 등록하기"}
-                    </button>
-                  </div>
-                );
-              })
-            }
-          </div>
-        ) : (
-          /* ── 후보 목록 메인 뷰 ── */
-          <div style={{ paddingBottom:"80px" }}>
-            <p style={{ fontSize:"12px", fontWeight:700, color:"var(--text-secondary)", margin:"0 0 10px" }}>후보 장소 ({candidateList.length})</p>
-            {candidateList.length === 0
-              ? <div style={{ textAlign:"center", padding:"48px 0" }}>
-                  <div style={{ fontSize:"36px", marginBottom:"12px" }}>📍</div>
-                  <p style={{ fontSize:"14px", color:"var(--text-secondary)", fontWeight:600 }}>아직 후보 장소가 없어요</p>
-                  <p style={{ fontSize:"13px", color:"var(--text-tertiary)", marginTop:"4px" }}>위 검색창에서 장소를 찾아 추가해보세요</p>
-                </div>
-              : candidateList.map((p, idx) => {
-                const vCount = totalVotes(p.id);
-                const isVoted = placeVotes.has(p.id);
-                const isTop = idx === 0 && vCount > 0;
-                const isPicked = selectedPlace === p.id;
-                return (
-                  <div key={p.id} style={{ background:"var(--bg-card)", borderRadius:"14px", border: isPicked ? "2px solid #7C5CFC" : isTop ? "2px solid var(--accent)" : "1px solid var(--border)", padding:"14px", marginBottom:"10px", position:"relative", transition:"border 0.15s" }}>
-                    {isTop && !isPicked && <div style={{ position:"absolute", top:"-1px", left:"14px", background:"var(--accent)", color:"#fff", fontSize:"10px", fontWeight:700, padding:"2px 8px", borderRadius:"0 0 8px 8px" }}>👑 1위</div>}
-                    {isPicked && <div style={{ position:"absolute", top:"-1px", left:"14px", background:"#7C5CFC", color:"#fff", fontSize:"10px", fontWeight:700, padding:"2px 8px", borderRadius:"0 0 8px 8px" }}>✓ 선택됨</div>}
-                    <div style={{ display:"flex", gap:"12px", marginTop: (isTop || isPicked) ? "8px" : "0" }}>
-                      <div style={{ width:"48px", height:"48px", borderRadius:"12px", background:"var(--bg-secondary)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"24px", flexShrink:0 }}>{p.emoji}</div>
-                      <div style={{ flex:1, minWidth:0 }}>
-                        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
-                          <div>
-                            <h4 style={{ fontSize:"15px", fontWeight:700, color:"var(--text-primary)", margin:0 }}>{p.name}</h4>
-                            <p style={{ fontSize:"12px", color:"var(--text-secondary)", margin:"3px 0 0" }}>{p.sub} · {p.price} · {p.dist}</p>
-                          </div>
-                          <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:"4px" }}>
-                            <span style={{ color:"#FFB800", fontSize:"12px", fontWeight:700 }}>★ {p.rating}</span>
-                            <button onClick={() => toggleCandidate(p.id)} style={{ background:"none", border:"none", cursor:"pointer", color:"var(--text-tertiary)", fontSize:"11px", padding:0, fontWeight:600 }}>제거</button>
-                          </div>
-                        </div>
-                        <div style={{ display:"flex", gap:"5px", marginTop:"6px", flexWrap:"wrap" }}>
-                          {p.tags.map(t => <span key={t} style={{ padding:"2px 7px", borderRadius:"5px", background:"var(--bg-secondary)", fontSize:"10px", color:"var(--text-tertiary)", fontWeight:600 }}>{t}</span>)}
-                        </div>
-                      </div>
-                    </div>
-                    <div style={{ display:"flex", gap:"8px", marginTop:"10px" }}>
-                      <button onClick={() => toggleVote(p.id)} style={{ flex:1, padding:"9px", borderRadius:"9px", border:"none", background: isVoted ? "var(--accent)" : "var(--bg-secondary)", color: isVoted ? "#fff" : "var(--text-secondary)", fontSize:"12px", fontWeight:700, cursor:"pointer", transition:"all 0.2s" }}>
-                        {isVoted ? `✓ 투표함 (${vCount}명)` : `투표하기 (${vCount}명)`}
-                      </button>
-                      <button onClick={() => setSelectedPlace(isPicked ? null : p.id)} style={{ flex:1, padding:"9px", borderRadius:"9px", border: isPicked ? "none" : "1.5px solid #7C5CFC", background: isPicked ? "#7C5CFC" : "transparent", color: isPicked ? "#fff" : "#7C5CFC", fontSize:"12px", fontWeight:700, cursor:"pointer", transition:"all 0.15s" }}>
-                        {isPicked ? "선택 해제" : "이 곳으로 확정"}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })
-            }
-          </div>
-        )}
-      </div>
-
-      {!isSearchMode && (
-        <div style={{ padding:"12px 20px 12px", flexShrink:0, display:"flex", flexDirection:"column", gap:"8px" }}>
-          {candidateList.length > 0 && (
-            selectedPlace
-              ? (isEditing
-                  ? <button onClick={() => { onConfirmPlace(PLACE_DB.find(p=>p.id===selectedPlace)?.name ?? null); onNavigate(SCREENS.HOME); }} style={{ width:"100%", padding:"16px", background:"var(--bg-card)", border:"1.5px solid var(--text-primary)", borderRadius:"14px", fontSize:"16px", fontWeight:700, color:"var(--text-primary)", cursor:"pointer" }}>
-                      변경하기
-                    </button>
-                  : <ConfirmButton
-                      label={`${PLACE_DB.find(p => p.id === selectedPlace)?.name ?? "선택한 장소"}로 확정하기`}
-                      warning="모든 참여자의 장소가 확정돼요"
-                      onConfirm={() => { onConfirmPlace(PLACE_DB.find(p => p.id === selectedPlace)?.name ?? null); onNavigate(SCREENS.HOME); }}
-                    />
-                )
-              : <div style={{ padding:"13px 16px", background:"var(--bg-secondary)", borderRadius:"14px", textAlign:"center", fontSize:"13px", color:"var(--text-tertiary)", fontWeight:600 }}>
-                  {isEditing ? "변경할 장소를 선택해주세요" : "후보 중 확정할 장소를 선택해주세요"}
-                </div>
-          )}
-          <button onClick={() => { onConfirmPlace(null); onNavigate(SCREENS.HOME); }} style={{ width:"100%", padding:"12px", background:"transparent", color:"var(--text-tertiary)", border:"1px dashed var(--border)", borderRadius:"14px", fontSize:"13px", fontWeight:600, cursor:"pointer" }}>
-            일단 장소 없이 확정할게요
+        {/* 장소 탐색 버튼들 */}
+        <div style={{ display:"flex", gap:"10px", marginBottom:"16px", marginTop:"4px" }}>
+          <button onClick={() => setView("browse")} style={{ flex:1, padding:"14px 16px", background:"var(--bg-card)", border:"1.5px dashed var(--accent)", borderRadius:"14px", cursor:"pointer", display:"flex", alignItems:"center", gap:"10px", textAlign:"left" }}>
+            <div style={{ width:"32px", height:"32px", borderRadius:"8px", background:"linear-gradient(135deg, rgba(255,107,74,0.15), rgba(124,92,252,0.15))", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"16px", flexShrink:0 }}>🗺️</div>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:"12px", fontWeight:700, color:"var(--accent)" }}>지역별 탐색</div>
+              <div style={{ fontSize:"10px", color:"var(--text-secondary)", marginTop:"1px" }}>홍대, 강남, 성수...</div>
+            </div>
+          </button>
+          <button onClick={() => onNavigate(SCREENS.PLACE_RECOMMEND)} style={{ flex:1, padding:"14px 16px", background:"var(--bg-card)", border:"1.5px dashed #7C5CFC", borderRadius:"14px", cursor:"pointer", display:"flex", alignItems:"center", gap:"10px", textAlign:"left" }}>
+            <div style={{ width:"32px", height:"32px", borderRadius:"8px", background:"linear-gradient(135deg, rgba(124,92,252,0.15), rgba(0,201,167,0.15))", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"16px", flexShrink:0 }}>📍</div>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:"12px", fontWeight:700, color:"#7C5CFC" }}>중간지점 추천</div>
+              <div style={{ fontSize:"10px", color:"var(--text-secondary)", marginTop:"1px" }}>모두의 중간 위치</div>
+            </div>
           </button>
         </div>
-      )}
+
+        {/* 후보 목록 */}
+        <p style={{ fontSize:"12px", fontWeight:700, color:"var(--text-secondary)", margin:"0 0 10px" }}>후보 장소 ({candidateList.length})</p>
+        {candidateList.length === 0
+          ? <div style={{ textAlign:"center", padding:"48px 0" }}>
+              <div style={{ fontSize:"36px", marginBottom:"12px" }}>📍</div>
+              <p style={{ fontSize:"14px", color:"var(--text-secondary)", fontWeight:600 }}>아직 후보 장소가 없어요</p>
+              <p style={{ fontSize:"13px", color:"var(--text-tertiary)", marginTop:"4px" }}>위에서 지역별로 탐색해보세요</p>
+            </div>
+          : <div style={{ paddingBottom:"80px" }}>{candidateList.map((p, idx) => {
+              const isTop = idx === 0 && totalVotes(p.id) > 0;
+              return (
+                <div key={p.id} style={{ position:"relative" }}>
+                  {isTop && <div style={{ position:"absolute", top:"-1px", left:"14px", background:"var(--accent)", color:"#fff", fontSize:"10px", fontWeight:700, padding:"2px 8px", borderRadius:"0 0 8px 8px", zIndex:1 }}>👑 1위</div>}
+                  <div style={{ marginTop: isTop ? "4px" : "0" }}>
+                    <PlaceCard p={p} showAdd={false} />
+                  </div>
+                </div>
+              );
+            })}</div>
+        }
+      </div>
+      <div style={{ padding:"12px 20px", flexShrink:0, display:"flex", flexDirection:"column", gap:"8px" }}>
+        {candidateList.length > 0 && selectedPlace && (
+          isEditing
+            ? <button onClick={() => { onConfirmPlace(candidateData[selectedPlace]?.place_name ?? null); onNavigate(SCREENS.HOME); }} style={{ width:"100%", padding:"16px", background:"var(--bg-card)", border:"1.5px solid var(--text-primary)", borderRadius:"14px", fontSize:"16px", fontWeight:700, color:"var(--text-primary)", cursor:"pointer" }}>변경하기</button>
+            : <ConfirmButton label={`${candidateData[selectedPlace]?.place_name ?? "선택한 장소"}로 확정하기`} warning="모든 참여자의 장소가 확정돼요" onConfirm={() => { onConfirmPlace(candidateData[selectedPlace]?.place_name ?? null); onNavigate(SCREENS.HOME); }} />
+        )}
+        <button onClick={() => { onConfirmPlace(null); onNavigate(SCREENS.HOME); }} style={{ width:"100%", padding:"12px", background:"transparent", color:"var(--text-tertiary)", border:"1px dashed var(--border)", borderRadius:"14px", fontSize:"13px", fontWeight:600, cursor:"pointer" }}>
+          일단 장소 없이 확정할게요
+        </button>
+      </div>
     </div>
   );
 }
@@ -1156,40 +1193,41 @@ function DetailScreen({ onNavigate, meeting, restVoted, setRestVoted }) {
 }
 
 function RestVoteScreen({ onNavigate, setRestVoted, meeting, userName, onResetMeeting }) {
-  const [voted, setVoted] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [allRested, setAllRested] = useState(false);
+  // state: "idle" | "loading" | "voted" | "matched"
+  const [voteState, setVoteState] = useState("idle");
   const [floatingEmojis, setFloatingEmojis] = useState([]);
 
   const handleVote = async () => {
-    setLoading(true);
+    setVoteState("loading");
     if (setRestVoted) setRestVoted(true);
     try {
       const db = window.db;
       if (db && meeting) {
-        const restVotes = meeting.restVotes || [];
-        const updated = restVotes.includes(userName) ? restVotes : [...restVotes, userName];
-        await db.collection("meetings").doc(meeting.id).update({ restVotes: updated });
-        const members = meeting.members || [];
-        if (updated.length >= members.length) {
-          setAllRested(true);
+        await db.collection("meetings").doc(meeting.id).update({
+          restVotes: firebase.firestore.FieldValue.arrayUnion(userName)
+        });
+        const snap = await db.collection("meetings").doc(meeting.id).get();
+        const fresh = snap.data();
+        const updated = fresh.restVotes || [];
+        const members = fresh.members || [];
+        if (updated.length >= members.length && members.length > 0) {
           setFloatingEmojis(Array.from({length:12}, (_,i) => ({
             id: i,
             emoji: ["😴","💤","🛋️","🌙","✨","💜","🌸","😪"][i % 8],
             left: Math.random() * 80 + 10,
             delay: Math.random() * 0.5
           })));
+          setVoteState("matched");
+          return;
         }
       }
     } catch(e) {
       console.error("restVote error:", e);
     }
-    setLoading(false);
-    setVoted(true);
+    setVoteState("voted");
   };
 
-  // 모두 쉬고 싶어요 — 매칭 화면
-  if (voted && allRested) {
+  if (voteState === "matched") {
     return (
       <div className="fade-in" style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:"32px 24px", textAlign:"center", background:"linear-gradient(160deg, #1a1a2e 0%, #2d1b4e 100%)", position:"relative", overflow:"hidden" }}>
         {/* 떠오르는 이모지들 */}
@@ -1216,10 +1254,10 @@ function RestVoteScreen({ onNavigate, setRestVoted, meeting, userName, onResetMe
 
         {/* 버튼들 */}
         <div style={{ display:"flex", flexDirection:"column", gap:"10px", width:"100%", animation:"matchPop 0.6s 0.4s cubic-bezier(0.34,1.56,0.64,1) both" }}>
-          <button onClick={() => { onResetMeeting && onResetMeeting(); onNavigate(SCREENS.TIME_SELECT); }} style={{ width:"100%", padding:"16px", background:"linear-gradient(135deg, #7C5CFC, #FF3CAC)", color:"#fff", border:"none", borderRadius:"16px", fontSize:"15px", fontWeight:700, cursor:"pointer" }}>
+          <button onClick={() => { onNavigate(SCREENS.CREATE); }} style={{ width:"100%", padding:"16px", background:"linear-gradient(135deg, #7C5CFC, #FF3CAC)", color:"#fff", border:"none", borderRadius:"16px", fontSize:"15px", fontWeight:700, cursor:"pointer" }}>
             다음 만남 일정 정하기 →
           </button>
-          <button onClick={() => onNavigate(SCREENS.HOME)} style={{ width:"100%", padding:"14px", background:"rgba(255,255,255,0.1)", color:"rgba(255,255,255,0.7)", border:"1px solid rgba(255,255,255,0.15)", borderRadius:"16px", fontSize:"14px", fontWeight:600, cursor:"pointer" }}>
+          <button onClick={async () => { if(onResetMeeting) await onResetMeeting(); onNavigate(SCREENS.HOME); }} style={{ width:"100%", padding:"14px", background:"rgba(255,255,255,0.1)", color:"rgba(255,255,255,0.7)", border:"1px solid rgba(255,255,255,0.15)", borderRadius:"16px", fontSize:"14px", fontWeight:600, cursor:"pointer" }}>
             홈으로 돌아가기
           </button>
         </div>
@@ -1231,7 +1269,7 @@ function RestVoteScreen({ onNavigate, setRestVoted, meeting, userName, onResetMe
     <div className="fade-in" style={{ flex:1, overflowY:"auto" }}>
       <Header title="오늘 쉬고 싶어" onBack={() => onNavigate(SCREENS.DETAIL)} />
       <div style={{ padding:"20px", display:"flex", flexDirection:"column", alignItems:"center", textAlign:"center" }}>
-        {!voted ? (
+        {voteState === "idle" ? (
           <>
             <div style={{ width:"100px", height:"100px", borderRadius:"50%", background:"linear-gradient(135deg, rgba(124,92,252,0.1), rgba(255,60,172,0.1))", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"48px", marginBottom:"24px" }}>😴</div>
             <h2 style={{ fontSize:"20px", fontWeight:800, color:"var(--text-primary)", margin:"0 0 8px" }}>오늘 좀 쉬고 싶나요?</h2>
@@ -1249,7 +1287,7 @@ function RestVoteScreen({ onNavigate, setRestVoted, meeting, userName, onResetMe
               <button onClick={handleVote} style={{ flex:1, padding:"16px", background:"linear-gradient(135deg, #7C5CFC, #FF3CAC)", color:"#fff", border:"none", borderRadius:"14px", fontSize:"15px", fontWeight:700, cursor:"pointer" }}>쉬고 싶어요</button>
             </div>
           </>
-        ) : loading ? (
+        ) : voteState === "loading" ? (
           <div style={{ padding:"60px 0" }}>
             <div style={{ width:"60px", height:"60px", borderRadius:"50%", border:"3px solid var(--bg-secondary)", borderTopColor:"var(--accent)", animation:"spin 1s linear infinite", margin:"0 auto 20px" }} />
             <p style={{ fontSize:"15px", color:"var(--text-secondary)" }}>투표를 제출하고 있어요...</p>
@@ -1399,9 +1437,11 @@ function App() {
   const [meetings, setMeetings] = useState([]);
   const [candidates, setCandidates] = useState(new Set());
   const [placeVotes, setPlaceVotes] = useState(new Set());
-  const [currentMeetingId, setCurrentMeetingId] = useState(null);
+  const [currentMeetingId, setCurrentMeetingId] = useState(() => localStorage.getItem("moim_meetingid") || null);
+  const saveMeetingId = (id) => { setCurrentMeetingId(id); if(id) localStorage.setItem("moim_meetingid", id); else localStorage.removeItem("moim_meetingid"); };
   const [restVoted, setRestVoted] = useState(false);
-  const [userName, setUserName] = useState("민지");
+  const [userName, setUserName] = useState(() => localStorage.getItem("moim_username") || "");
+  const saveUserName = (name) => { setUserName(name); localStorage.setItem("moim_username", name); };
   const [chatOpen, setChatOpen] = useState(false);
   const [chatMessages, setChatMessages] = useState([...MOCK_CHAT]);
   const [chatInput, setChatInput] = useState("");
@@ -1439,7 +1479,7 @@ function App() {
     const params = new URLSearchParams(window.location.search);
     const inviteId = params.get("invite");
     if (inviteId) {
-      setCurrentMeetingId(inviteId);
+      saveMeetingId(inviteId);
       setScreen(SCREENS.LINK_JOIN);
     }
   }, []);
@@ -1460,7 +1500,7 @@ function App() {
       createdAt: Date.now()
     };
     const docRef = await db.collection("meetings").add(newMeeting);
-    setCurrentMeetingId(docRef.id);
+    saveMeetingId(docRef.id);
   };
   const removeMeeting = async (id) => {
     const db = window.db;
@@ -1486,17 +1526,24 @@ function App() {
 
   const renderScreen = () => {
     switch (screen) {
-      case SCREENS.HOME:            return <HomeScreen onNavigate={navigate} meetings={meetings} onRemove={removeMeeting} onSelectMeeting={setCurrentMeetingId} />;
+      case SCREENS.HOME:            return <HomeScreen onNavigate={navigate} meetings={meetings} onRemove={removeMeeting} onSelectMeeting={saveMeetingId} userName={userName} onSetUserName={saveUserName} />;
       case SCREENS.CREATE:          return <CreateScreen onNavigate={navigate} onCreateMeeting={addMeeting} />;
       case SCREENS.INVITE:          return <InviteScreen onNavigate={navigate} meetingId={currentMeetingId} />;
-      case SCREENS.LINK_JOIN:       return <LinkJoinScreen onNavigate={navigate} meeting={meetings.find(m=>m.id===currentMeetingId)} onSetUserName={setUserName} />;
+      case SCREENS.LINK_JOIN:       return <LinkJoinScreen onNavigate={navigate} meeting={meetings.find(m=>m.id===currentMeetingId)} onSetUserName={saveUserName} />;
       case SCREENS.DATE_SELECT:     return <DateSelectScreen onNavigate={navigate} selectedDates={selectedDates} setSelectedDates={setSelectedDates} />;
       case SCREENS.TIME_SELECT:     return <TimeSelectScreen onNavigate={navigate} selectedDates={selectedDates} meetingId={currentMeetingId} userName={userName} />;
       case SCREENS.TIME_RESULT:     return <TimeResultScreen onNavigate={navigate} onConfirmTime={confirmTime} isEditing={meetings.find(m=>m.id===currentMeetingId)?.step==="done"} meeting={meetings.find(m=>m.id===currentMeetingId)} />;
       case SCREENS.PLACE_SELECT:    return <PlaceSelectScreen onNavigate={navigate} candidates={candidates} setCandidates={setCandidates} placeVotes={placeVotes} setPlaceVotes={setPlaceVotes} onConfirmPlace={confirmPlace} isEditing={meetings.find(m=>m.id===currentMeetingId)?.step==="done"} />;
       case SCREENS.PLACE_RECOMMEND: return <PlaceRecommendScreen onNavigate={navigate} />;
       case SCREENS.DETAIL:          return <DetailScreen onNavigate={navigate} meeting={meetings.find(m=>m.id===currentMeetingId)} restVoted={restVoted} setRestVoted={setRestVoted} />;
-      case SCREENS.REST_VOTE:       return <RestVoteScreen onNavigate={navigate} setRestVoted={setRestVoted} meeting={meetings.find(m=>m.id===currentMeetingId)} userName={userName} onResetMeeting={() => { const db = window.db; if(db && currentMeetingId) db.collection("meetings").doc(currentMeetingId).update({ restVotes: [], step:"time", availability:{} }); }} />;
+      case SCREENS.REST_VOTE:       return <RestVoteScreen onNavigate={navigate} setRestVoted={setRestVoted} meeting={meetings.find(m=>m.id===currentMeetingId)} userName={userName} onResetMeeting={async () => {
+  const db = window.db;
+  console.log("delete meeting:", currentMeetingId);
+  try {
+    if(db && currentMeetingId) await db.collection("meetings").doc(currentMeetingId).delete();
+  } catch(e) { console.error("delete error:", e); }
+  saveMeetingId(null);
+}} />;
       default:                      return <HomeScreen onNavigate={navigate} />;
     }
   };
