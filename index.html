@@ -8,6 +8,20 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.2/babel.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script>
+  const firebaseConfig = {
+    apiKey: "AIzaSyDZL45dcfdqORQmhSCXrPXLkIo_JDP6Q78",
+    authDomain: "moim2-b5bb6.firebaseapp.com",
+    projectId: "moim2-b5bb6",
+    storageBucket: "moim2-b5bb6.firebasestorage.app",
+    messagingSenderId: "861472476019",
+    appId: "1:861472476019:web:b52d8524ef742945bad306"
+  };
+  firebase.initializeApp(firebaseConfig);
+  window.db = firebase.firestore();
+</script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -1247,7 +1261,7 @@ function ChatPanel({ open, onToggle, messages, input, setInput, onSend, unread }
 function App() {
   const [screen, setScreen] = useState(SCREENS.HOME);
   const [selectedDates, setSelectedDates] = useState(new Set());
-  const [meetings, setMeetings] = useState([...MOCK_MEETINGS]);
+  const [meetings, setMeetings] = useState([]);
   const [candidates, setCandidates] = useState(new Set());
   const [placeVotes, setPlaceVotes] = useState(new Set());
   const [currentMeetingId, setCurrentMeetingId] = useState(null);
@@ -1275,11 +1289,21 @@ function App() {
   };
   const openChat = () => { setChatOpen(true); setChatUnread(0); };
 
+  useEffect(() => {
+    const db = window.db;
+    if (!db) return;
+    const unsub = db.collection("meetings").orderBy("createdAt", "desc").onSnapshot((snapshot) => {
+      const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      setMeetings(data);
+    });
+    return () => unsub();
+  }, []);
+
   const COLORS = ["#7C5CFC", "#00C9A7", "#FF6B4A", "#FFB800", "#FF3CAC"];
-  const addMeeting = (title) => {
-    const newId = Date.now();
-    setMeetings(prev => [{
-      id: newId,
+  const addMeeting = async (title) => {
+    const db = window.db;
+    if (!db) return;
+    const newMeeting = {
       title,
       date: "날짜 조율 중",
       time: "미정",
@@ -1287,19 +1311,31 @@ function App() {
       members: ["민지"],
       status: "voting",
       step: "time",
-      color: COLORS[prev.length % COLORS.length]
-    }, ...prev]);
-    setCurrentMeetingId(newId);
+      color: COLORS[meetings.length % COLORS.length],
+      createdAt: Date.now()
+    };
+    const docRef = await db.collection("meetings").add(newMeeting);
+    setCurrentMeetingId(docRef.id);
   };
-  const removeMeeting = (id) => setMeetings(prev => prev.filter(m => m.id !== id));
+  const removeMeeting = async (id) => {
+    const db = window.db;
+    if (db) await db.collection("meetings").doc(id).delete();
+  };
 
-  const confirmTime = (date, time) => {
+  const confirmTime = async (date, time) => {
+    const db = window.db;
     const isEditing = meetings.find(m => m.id === currentMeetingId)?.step === "done";
-    setMeetings(prev => prev.map(m => m.id === currentMeetingId ? { ...m, step: isEditing ? "done" : "place", date, time } : m));
+    if (db && currentMeetingId) {
+      await db.collection("meetings").doc(currentMeetingId).update({ step: isEditing ? "done" : "place", date, time });
+    }
     navigate(isEditing ? SCREENS.HOME : SCREENS.PLACE_SELECT);
   };
-  const confirmPlace = (placeName) => {
-    setMeetings(prev => prev.map(m => m.id === currentMeetingId ? { ...m, step: "done", status: "confirmed", place: placeName !== null ? placeName : m.place } : m));
+  const confirmPlace = async (placeName) => {
+    const db = window.db;
+    const current = meetings.find(m => m.id === currentMeetingId);
+    if (db && currentMeetingId) {
+      await db.collection("meetings").doc(currentMeetingId).update({ step: "done", status: "confirmed", place: placeName !== null ? placeName : (current?.place || null) });
+    }
     navigate(SCREENS.HOME);
   };
 
