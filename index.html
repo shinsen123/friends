@@ -894,7 +894,7 @@ function PlaceSelectScreen({ onNavigate, candidates, setCandidates, placeVotes, 
       setSearchError(null);
       try {
         const catCode = mainCat === "카페" ? "CE7" : mainCat === "전체" ? "" : "FD6";
-        const url = `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(query)}&size=45${catCode ? `&category_group_code=${catCode}` : ""}`;
+        const url = `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(query)}&size=15${catCode ? `&category_group_code=${catCode}` : ""}`;
         const res = await fetch(url, { headers: { Authorization: `KakaoAK ${KAKAO_KEY}` } });
         const data = await res.json();
         console.log("Kakao API response:", JSON.stringify(data));
