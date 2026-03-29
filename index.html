@@ -880,6 +880,7 @@ function PlaceSelectScreen({ onNavigate, candidates, setCandidates, placeVotes, 
   const [mainCat, setMainCat] = useState("전체");
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState(null);
   const [candidateData, setCandidateData] = useState({});
   const [selectedPlace, setSelectedPlace] = useState(null);
 
@@ -890,17 +891,18 @@ function PlaceSelectScreen({ onNavigate, candidates, setCandidates, placeVotes, 
     if (!isSearchMode) return;
     const timer = setTimeout(async () => {
       setSearching(true);
+      setSearchError(null);
       try {
-        const catCode = mainCat === "카페" ? "CE7" : "FD6";
-        const res = await fetch(
-          `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(query)}&size=45&category_group_code=${catCode}`,
-          { headers: { Authorization: `KakaoAK ${KAKAO_KEY}` } }
-        );
+        const catCode = mainCat === "카페" ? "CE7" : mainCat === "전체" ? "" : "FD6";
+        const url = `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(query)}&size=45${catCode ? `&category_group_code=${catCode}` : ""}`;
+        const res = await fetch(url, { headers: { Authorization: `KakaoAK ${KAKAO_KEY}` } });
         const data = await res.json();
+        console.log("Kakao API response:", data);
+        if (data.errorType || data.code) { setSearchError(`API 오류: ${data.message || data.errorType}`); setSearchResults([]); return; }
         let results = data.documents || [];
         if (mainCat === "술집") results = results.filter(p => BAR_KEYWORDS.some(k => p.category_name.includes(k)));
         setSearchResults(results);
-      } catch(e) { console.error(e); setSearchResults([]); }
+      } catch(e) { console.error(e); setSearchResults([]); setSearchError(`네트워크 오류: ${e.message}`); }
       setSearching(false);
     }, 500);
     return () => clearTimeout(timer);
@@ -963,6 +965,12 @@ function PlaceSelectScreen({ onNavigate, candidates, setCandidates, placeVotes, 
               <div style={{ textAlign:"center", padding:"40px 0" }}>
                 <div style={{ width:"28px", height:"28px", borderRadius:"50%", border:"3px solid var(--bg-secondary)", borderTopColor:"var(--accent)", animation:"spin 1s linear infinite", margin:"0 auto 10px" }} />
                 <p style={{ fontSize:"13px", color:"var(--text-secondary)" }}>검색 중...</p>
+              </div>
+            ) : searchError ? (
+              <div style={{ textAlign:"center", padding:"40px 0" }}>
+                <div style={{ fontSize:"28px", marginBottom:"10px" }}>⚠️</div>
+                <p style={{ fontSize:"13px", color:"#FF3B30", fontWeight:600 }}>{searchError}</p>
+                <p style={{ fontSize:"11px", color:"var(--text-tertiary)", marginTop:"8px", lineHeight:1.5 }}>카카오 개발자 콘솔 → 내 앱 → 플랫폼 → Web에<br />https://shinsen123.github.io 등록 필요</p>
               </div>
             ) : (
               <>
