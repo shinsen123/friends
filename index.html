@@ -433,13 +433,24 @@ function DateSelectScreen({ onNavigate, selectedDates, setSelectedDates }) {
   );
 }
 
-function TimeSelectScreen({ onNavigate, selectedDates, meetingId, userName }) {
+function TimeSelectScreen({ onNavigate, selectedDates, meetingId, userName, meeting }) {
   // 내가 선택한 날짜 (홈에서 바로 온 경우 기본값)
   const myDates = selectedDates && selectedDates.size > 0
     ? selectedDates
     : new Set(["2026-3-29", "2026-3-30"]);
 
-  const allDateKeys = [...myDates].sort((a, b) => {
+  // 다른 참가자들이 선택한 날짜 추출
+  const availability = meeting ? (meeting.availability || {}) : {};
+  const friendDateSet = new Set();
+  Object.values(availability).forEach(slots => {
+    (slots || []).forEach(key => {
+      const parts = key.split("-");
+      if (parts.length >= 4) friendDateSet.add(`${parts[0]}-${parts[1]}-${parts[2]}`);
+    });
+  });
+
+  // 내 날짜 + 친구 날짜 합집합으로 그리드 구성
+  const allDateKeys = [...new Set([...myDates, ...friendDateSet])].sort((a, b) => {
     const parse = s => { const [y,m,d] = s.split('-').map(Number); return new Date(y,m-1,d); };
     return parse(a) - parse(b);
   });
@@ -533,9 +544,10 @@ function TimeSelectScreen({ onNavigate, selectedDates, meetingId, userName }) {
             <div style={{ width:`${TIME_W}px`, flexShrink:0 }} />
             {allDateKeys.map((key, di) => {
               const { label, dayName } = formatDate(key);
+              const selectable = myDates.has(key);
               return (
-                <div key={key} style={{ width:`${COL_W}px`, flexShrink:0, textAlign:"center", padding:"4px 2px 6px" }}>
-                  <div style={{ fontSize:"10px", fontWeight:700, color:"var(--accent)" }}>{dayName}</div>
+                <div key={key} style={{ width:`${COL_W}px`, flexShrink:0, textAlign:"center", padding:"4px 2px 6px", opacity: selectable ? 1 : 0.4 }}>
+                  <div style={{ fontSize:"10px", fontWeight:700, color: selectable ? "var(--accent)" : "var(--text-tertiary)" }}>{dayName}</div>
                   <div style={{ fontSize:"14px", fontWeight:800, color:"var(--text-primary)" }}>{label}</div>
                 </div>
               );
@@ -547,19 +559,23 @@ function TimeSelectScreen({ onNavigate, selectedDates, meetingId, userName }) {
             <div key={time} style={{ display:"flex", alignItems:"center" }}>
               <div style={{ width:`${TIME_W}px`, flexShrink:0, fontSize:"10px", color:"var(--text-tertiary)", fontWeight:600, textAlign:"right", paddingRight:"8px" }}>{time}</div>
               {allDateKeys.map((dateKey, di) => {
+                const selectable = myDates.has(dateKey);
                 const cellKey = `${dateKey}-${ti}`;
                 const sel = isSelected(di, ti, cellKey);
                 return (
                   <div key={cellKey} data-cell={cellKey} data-di={di} data-ti={ti}
-                    onPointerDown={(e) => handlePointerDown(e, di, ti, cellKey)}
+                    onPointerDown={selectable ? (e) => handlePointerDown(e, di, ti, cellKey) : undefined}
                     style={{
                       width:`${COL_W - 3}px`,
                       height:"34px",
                       margin:"1px 1.5px",
                       flexShrink:0,
                       borderRadius:"5px",
-                      background: sel ? "var(--accent)" : "var(--bg-secondary)",
-                      cursor:"pointer",
+                      background: selectable
+                        ? (sel ? "var(--accent)" : "var(--bg-secondary)")
+                        : "rgba(255,255,255,0.04)",
+                      cursor: selectable ? "pointer" : "default",
+                      opacity: selectable ? 1 : 0.45,
                       transition:"background 0.05s"
                     }}
                   />
@@ -1554,7 +1570,7 @@ function App() {
       case SCREENS.INVITE:          return <InviteScreen onNavigate={navigate} meetingId={currentMeetingId} />;
       case SCREENS.LINK_JOIN:       return <LinkJoinScreen onNavigate={navigate} meeting={meetings.find(m=>m.id===currentMeetingId)} onSetUserName={saveUserName} />;
       case SCREENS.DATE_SELECT:     return <DateSelectScreen onNavigate={navigate} selectedDates={selectedDates} setSelectedDates={setSelectedDates} />;
-      case SCREENS.TIME_SELECT:     return <TimeSelectScreen onNavigate={navigate} selectedDates={selectedDates} meetingId={currentMeetingId} userName={userName} />;
+      case SCREENS.TIME_SELECT:     return <TimeSelectScreen onNavigate={navigate} selectedDates={selectedDates} meetingId={currentMeetingId} userName={userName} meeting={meetings.find(m=>m.id===currentMeetingId)} />;
       case SCREENS.TIME_RESULT:     return <TimeResultScreen onNavigate={navigate} onConfirmTime={confirmTime} isEditing={meetings.find(m=>m.id===currentMeetingId)?.step==="done"} meeting={meetings.find(m=>m.id===currentMeetingId)} />;
       case SCREENS.PLACE_SELECT:    return <PlaceSelectScreen onNavigate={navigate} candidates={candidates} setCandidates={setCandidates} placeVotes={placeVotes} setPlaceVotes={setPlaceVotes} onConfirmPlace={confirmPlace} isEditing={meetings.find(m=>m.id===currentMeetingId)?.step==="done"} />;
       case SCREENS.PLACE_RECOMMEND: return <PlaceRecommendScreen onNavigate={navigate} />;
