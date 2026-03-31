@@ -1116,56 +1116,229 @@ function PlaceSelectScreen({ onNavigate, candidates, setCandidates, placeVotes, 
   );
 }
 
-function PlaceRecommendScreen({ onNavigate }) {
-  const [loading, setLoading] = useState(true);
-  useEffect(() => { const t = setTimeout(() => setLoading(false), 1500); return () => clearTimeout(t); }, []);
+function PlaceRecommendScreen({ onNavigate, meeting, meetingId, userName }) {
+  const KAKAO_KEY = "5ca31923d00be258137c726a342bb8e6";
+  const locations = meeting ? (meeting.locations || {}) : {};
+  const myLocation = locations[userName] || null;
 
-  const recommendations = [
-    { name:"왕십리역 근처", time:"평균 23분", spots:12, match:95 },
-    { name:"성수역 근처", time:"평균 28분", spots:24, match:88 },
-    { name:"건대입구역 근처", time:"평균 31분", spots:31, match:82 },
-  ];
+  const [phase, setPhase] = useState(myLocation ? 'result' : 'setup');
+  const [query, setQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [saveAsHome, setSaveAsHome] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [subwayStations, setSubwayStations] = useState([]);
+  const [loadingSubway, setLoadingSubway] = useState(false);
+
+  const COLORS = ["#FF6B4A","#7C5CFC","#00C9A7","#FFB800","#FF3CAC","#4A90E2"];
+
+  // 집 위치 불러오기
+  useEffect(() => {
+    if (myLocation) { setPhase('result'); return; }
+    const home = localStorage.getItem('moim_home_location');
+    if (home) {
+      try {
+        const parsed = JSON.parse(home);
+        setSelected(parsed);
+        setQuery(parsed.address);
+      } catch(e) {}
+    }
+  }, []);
+
+  // meeting.locations 바뀔 때마다 중간지점 재계산
+  useEffect(() => {
+    const locs = Object.values(locations);
+    if (locs.length === 0) { setSubwayStations([]); return; }
+    const midLat = locs.reduce((s, l) => s + l.lat, 0) / locs.length;
+    const midLng = locs.reduce((s, l) => s + l.lng, 0) / locs.length;
+    setLoadingSubway(true);
+    fetch(`https://dapi.kakao.com/v2/local/search/category.json?category_group_code=SW8&x=${midLng}&y=${midLat}&radius=5000&sort=distance`, {
+      headers: { Authorization: `KakaoAK ${KAKAO_KEY}` }
+    })
+    .then(r => r.json())
+    .then(data => { setSubwayStations((data.documents || []).slice(0, 5)); setLoadingSubway(false); })
+    .catch(() => setLoadingSubway(false));
+  }, [JSON.stringify(locations)]);
+
+  const searchAddress = async () => {
+    if (!query.trim()) return;
+    setSearching(true);
+    setSearchResults([]);
+    try {
+      const res = await fetch(`https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(query)}&size=5`, {
+        headers: { Authorization: `KakaoAK ${KAKAO_KEY}` }
+      });
+      const data = await res.json();
+      setSearchResults(data.documents || []);
+    } catch(e) {}
+    setSearching(false);
+  };
+
+  const confirmLocation = async () => {
+    if (!selected) return;
+    setSaving(true);
+    if (saveAsHome) {
+      localStorage.setItem('moim_home_location', JSON.stringify(selected));
+    }
+    const db = window.db;
+    if (db && meetingId) {
+      await db.collection("meetings").doc(meetingId).update({
+        [`locations.${userName}`]: selected
+      });
+    }
+    setSaving(false);
+    setPhase('result');
+  };
+
+  // ── Setup 화면 ──
+  if (phase === 'setup') {
+    const homeSaved = !!localStorage.getItem('moim_home_location');
+    return (
+      <div className="fade-in" style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden" }}>
+        <Header title="출발지 설정" onBack={() => onNavigate(SCREENS.PLACE_SELECT)} />
+        <div style={{ flex:1, overflowY:"auto", padding:"0 20px 24px" }}>
+
+          {/* 안내 */}
+          <div style={{ background:"rgba(255,107,74,0.08)", borderRadius:"14px", padding:"14px 16px", marginBottom:"20px", display:"flex", gap:"10px", alignItems:"flex-start" }}>
+            <span style={{ fontSize:"20px" }}>🏠</span>
+            <div>
+              <div style={{ fontSize:"13px", fontWeight:700, color:"var(--accent)", marginBottom:"3px" }}>집 위치를 등록하면 편해요</div>
+              <div style={{ fontSize:"12px", color:"var(--text-secondary)", lineHeight:1.5 }}>한 번 등록해두면 다음 모임에서도 자동으로 사용돼요</div>
+            </div>
+          </div>
+
+          {/* 검색 */}
+          <div style={{ fontSize:"12px", fontWeight:700, color:"var(--text-secondary)", marginBottom:"8px" }}>출발지 검색</div>
+          <div style={{ display:"flex", gap:"8px", marginBottom:"10px" }}>
+            <input
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && searchAddress()}
+              placeholder="동네, 역, 주소 검색"
+              style={{ flex:1, padding:"12px 14px", background:"var(--bg-secondary)", border:"1.5px solid var(--border)", borderRadius:"12px", fontSize:"14px", color:"var(--text-primary)", fontFamily:"inherit", outline:"none" }}
+            />
+            <button onClick={searchAddress} style={{ padding:"0 16px", background:"var(--accent)", border:"none", borderRadius:"12px", color:"#fff", fontSize:"13px", fontWeight:700, cursor:"pointer", flexShrink:0 }}>
+              {searching ? "..." : "검색"}
+            </button>
+          </div>
+
+          {/* 검색 결과 */}
+          {searchResults.length > 0 && (
+            <div style={{ background:"var(--bg-card)", border:"1px solid var(--border)", borderRadius:"12px", overflow:"hidden", marginBottom:"14px" }}>
+              {searchResults.map((r, i) => (
+                <div key={r.id} onClick={() => { setSelected({ name: r.place_name, address: r.address_name || r.road_address_name, lat: parseFloat(r.y), lng: parseFloat(r.x) }); setQuery(r.place_name); setSearchResults([]); }}
+                  style={{ padding:"12px 14px", borderBottom: i < searchResults.length-1 ? "1px solid var(--border)" : "none", cursor:"pointer", background: selected?.name === r.place_name ? "rgba(255,107,74,0.08)" : "transparent" }}>
+                  <div style={{ fontSize:"13px", fontWeight:600, color:"var(--text-primary)" }}>{r.place_name}</div>
+                  <div style={{ fontSize:"11px", color:"var(--text-tertiary)", marginTop:"2px" }}>{r.address_name}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* 선택된 위치 */}
+          {selected && (
+            <div style={{ background:"var(--bg-card)", border:"2px solid var(--accent)", borderRadius:"12px", padding:"12px 14px", marginBottom:"14px", display:"flex", alignItems:"center", gap:"10px" }}>
+              <span style={{ fontSize:"20px" }}>📍</span>
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:"13px", fontWeight:700, color:"var(--text-primary)" }}>{selected.name}</div>
+                <div style={{ fontSize:"11px", color:"var(--text-tertiary)", marginTop:"2px" }}>{selected.address}</div>
+              </div>
+            </div>
+          )}
+
+          {/* 집으로 등록 토글 */}
+          <div onClick={() => setSaveAsHome(v => !v)} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 16px", background:"var(--bg-secondary)", borderRadius:"12px", cursor:"pointer", marginBottom:"24px" }}>
+            <div style={{ display:"flex", alignItems:"center", gap:"10px" }}>
+              <span style={{ fontSize:"18px" }}>🏠</span>
+              <div>
+                <div style={{ fontSize:"13px", fontWeight:600, color:"var(--text-primary)" }}>집 위치로 저장</div>
+                <div style={{ fontSize:"11px", color:"var(--text-tertiary)" }}>{homeSaved ? "이미 저장된 집 위치가 있어요 (덮어쓰기)" : "다음 모임에서도 자동으로 사용"}</div>
+              </div>
+            </div>
+            <div style={{ width:"44px", height:"26px", borderRadius:"13px", background: saveAsHome ? "var(--accent)" : "var(--border)", position:"relative", transition:"background 0.2s", flexShrink:0 }}>
+              <div style={{ position:"absolute", top:"3px", left: saveAsHome ? "21px" : "3px", width:"20px", height:"20px", borderRadius:"50%", background:"#fff", transition:"left 0.2s" }} />
+            </div>
+          </div>
+
+          <button onClick={confirmLocation} disabled={!selected || saving} style={{ width:"100%", padding:"16px", background: selected ? "var(--accent)" : "var(--bg-secondary)", color: selected ? "#fff" : "var(--text-tertiary)", border:"none", borderRadius:"14px", fontSize:"16px", fontWeight:700, cursor: selected ? "pointer" : "default" }}>
+            {saving ? "저장 중..." : "출발지 설정 완료"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Result 화면 ──
+  const locEntries = Object.entries(locations);
+  const totalMembers = meeting ? (meeting.members || []).length : locEntries.length;
 
   return (
     <div className="fade-in" style={{ flex:1, overflowY:"auto" }}>
       <Header title="중간지점 추천" onBack={() => onNavigate(SCREENS.PLACE_SELECT)} />
-      {loading ? (
-        <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:"60px 20px", textAlign:"center" }}>
-          <div style={{ width:"60px", height:"60px", borderRadius:"50%", border:"3px solid var(--bg-secondary)", borderTopColor:"var(--accent)", animation:"spin 1s linear infinite" }} />
-          <p style={{ fontSize:"15px", fontWeight:600, color:"var(--text-primary)", marginTop:"20px" }}>참여자 위치를 분석하고 있어요...</p>
-          <p style={{ fontSize:"13px", color:"var(--text-secondary)" }}>모두에게 공정한 장소를 찾는 중</p>
-        </div>
-      ) : (
-        <div style={{ padding:"0 20px" }}>
-          <div style={{ height:"180px", borderRadius:"16px", background:"linear-gradient(135deg, #e8f4f8, #f0e8f8)", display:"flex", alignItems:"center", justifyContent:"center", marginBottom:"16px", position:"relative", overflow:"hidden" }}>
-            <div style={{ position:"absolute", inset:0, opacity:0.15, background:"repeating-linear-gradient(0deg, transparent, transparent 20px, var(--text-tertiary) 20px, var(--text-tertiary) 21px), repeating-linear-gradient(90deg, transparent, transparent 20px, var(--text-tertiary) 20px, var(--text-tertiary) 21px)" }} />
-            {[
-              { x:25, y:30, label:"지민", color:"#FF6B4A" },
-              { x:65, y:25, label:"서연", color:"#7C5CFC" },
-              { x:70, y:65, label:"민수", color:"#00C9A7" },
-              { x:35, y:70, label:"하은", color:"#FFB800" },
-              { x:48, y:48, label:"★", color:"#FF3CAC", big:true },
-            ].map((m, i) => (
-              <div key={i} style={{ position:"absolute", left:`${m.x}%`, top:`${m.y}%`, transform:"translate(-50%, -50%)", display:"flex", flexDirection:"column", alignItems:"center" }}>
-                <div style={{ width: m.big ? "28px" : "22px", height: m.big ? "28px" : "22px", borderRadius:"50%", background:m.color, color:"#fff", display:"flex", alignItems:"center", justifyContent:"center", fontSize: m.big ? "14px" : "9px", fontWeight:700, boxShadow: m.big ? "0 0 12px rgba(255,60,172,0.4)" : "0 2px 8px rgba(0,0,0,0.15)", border:"2px solid #fff" }}>{m.big ? "★" : m.label[0]}</div>
-                {!m.big && <span style={{ fontSize:"9px", fontWeight:700, color:"var(--text-secondary)", marginTop:"2px", background:"rgba(255,255,255,0.8)", padding:"1px 4px", borderRadius:"3px" }}>{m.label}</span>}
+      <div style={{ padding:"0 20px 24px" }}>
+
+        {/* 참가자 현황 */}
+        <div style={{ background:"var(--bg-card)", border:"1px solid var(--border)", borderRadius:"16px", padding:"16px", marginBottom:"16px" }}>
+          <div style={{ fontSize:"12px", fontWeight:700, color:"var(--text-secondary)", marginBottom:"12px" }}>출발지 입력 현황</div>
+          <div style={{ display:"flex", flexWrap:"wrap", gap:"8px", marginBottom:"10px" }}>
+            {locEntries.map(([name, loc], i) => (
+              <div key={name} style={{ display:"flex", alignItems:"center", gap:"6px", background:"rgba(255,107,74,0.08)", borderRadius:"20px", padding:"5px 10px" }}>
+                <div style={{ width:"20px", height:"20px", borderRadius:"50%", background:COLORS[i % COLORS.length], display:"flex", alignItems:"center", justifyContent:"center", fontSize:"10px", fontWeight:700, color:"#fff" }}>{name[0]}</div>
+                <span style={{ fontSize:"12px", fontWeight:600, color:"var(--text-primary)" }}>{name}</span>
+                <span style={{ fontSize:"11px", color:"var(--text-tertiary)" }}>{loc.name || loc.address}</span>
               </div>
             ))}
           </div>
-          {recommendations.map((rec, i) => (
-            <div key={i} onClick={() => onNavigate(SCREENS.PLACE_SELECT)} style={{ background:"var(--bg-card)", borderRadius:"14px", padding:"16px", border: i === 0 ? "2px solid var(--accent)" : "1px solid var(--border)", marginBottom:"10px", cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-              <div>
-                <div style={{ display:"flex", alignItems:"center", gap:"8px" }}>
-                  <h4 style={{ fontSize:"15px", fontWeight:700, color:"var(--text-primary)", margin:0 }}>{rec.name}</h4>
-                  {i === 0 && <span style={{ padding:"2px 8px", borderRadius:"6px", background:"var(--accent)", color:"#fff", fontSize:"10px", fontWeight:700 }}>추천</span>}
-                </div>
-                <p style={{ fontSize:"12px", color:"var(--text-secondary)", margin:"4px 0 0" }}>🕐 {rec.time} · 📍 주변 {rec.spots}곳</p>
-              </div>
-              <div style={{ fontSize:"20px", fontWeight:800, color: i === 0 ? "var(--accent)" : "var(--text-tertiary)" }}>{rec.match}%</div>
-            </div>
-          ))}
+          <div style={{ fontSize:"12px", color:"var(--text-tertiary)", fontWeight:600 }}>
+            {locEntries.length}명 입력 완료
+            {locEntries.length < totalMembers && ` · ${totalMembers - locEntries.length}명 대기 중`}
+          </div>
+          {/* 내 위치 변경 */}
+          <button onClick={() => setPhase('setup')} style={{ marginTop:"10px", padding:"7px 12px", background:"transparent", border:"1px solid var(--border)", borderRadius:"8px", fontSize:"11px", fontWeight:600, color:"var(--text-secondary)", cursor:"pointer" }}>
+            내 출발지 변경
+          </button>
         </div>
-      )}
+
+        {/* 중간지점 결과 */}
+        {locEntries.length === 0 ? (
+          <div style={{ textAlign:"center", padding:"40px 20px", color:"var(--text-tertiary)", fontSize:"14px" }}>
+            아직 아무도 입력하지 않았어요
+          </div>
+        ) : loadingSubway ? (
+          <div style={{ display:"flex", flexDirection:"column", alignItems:"center", padding:"40px 20px", gap:"12px" }}>
+            <div style={{ width:"40px", height:"40px", borderRadius:"50%", border:"3px solid var(--bg-secondary)", borderTopColor:"var(--accent)", animation:"spin 1s linear infinite" }} />
+            <div style={{ fontSize:"13px", color:"var(--text-secondary)" }}>중간 지하철역 찾는 중...</div>
+          </div>
+        ) : subwayStations.length > 0 ? (
+          <div>
+            <div style={{ fontSize:"12px", fontWeight:700, color:"var(--text-secondary)", marginBottom:"10px" }}>
+              {locEntries.length < totalMembers ? `현재 ${locEntries.length}명 기준 중간 지하철역` : "모두의 중간 지하철역"}
+            </div>
+            {subwayStations.map((st, i) => (
+              <div key={st.id} style={{ background:"var(--bg-card)", border: i === 0 ? "2px solid var(--accent)" : "1px solid var(--border)", borderRadius:"14px", padding:"14px 16px", marginBottom:"10px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                <div style={{ display:"flex", alignItems:"center", gap:"12px" }}>
+                  <div style={{ width:"36px", height:"36px", borderRadius:"10px", background: i === 0 ? "var(--accent)" : "var(--bg-secondary)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"16px", flexShrink:0 }}>🚇</div>
+                  <div>
+                    <div style={{ display:"flex", alignItems:"center", gap:"6px" }}>
+                      <span style={{ fontSize:"15px", fontWeight:700, color:"var(--text-primary)" }}>{st.place_name}</span>
+                      {i === 0 && <span style={{ padding:"2px 7px", borderRadius:"5px", background:"var(--accent)", color:"#fff", fontSize:"10px", fontWeight:700 }}>가장 가까운 중간</span>}
+                    </div>
+                    <div style={{ fontSize:"11px", color:"var(--text-tertiary)", marginTop:"3px" }}>{st.address_name}</div>
+                  </div>
+                </div>
+                <div style={{ fontSize:"12px", fontWeight:700, color: i === 0 ? "var(--accent)" : "var(--text-tertiary)", flexShrink:0, marginLeft:"8px" }}>
+                  {Math.round(parseInt(st.distance) / 100) / 10}km
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ textAlign:"center", padding:"40px 20px", color:"var(--text-tertiary)", fontSize:"14px" }}>
+            근처 지하철역을 찾을 수 없어요
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -1576,7 +1749,7 @@ function App() {
       case SCREENS.TIME_SELECT:     return <TimeSelectScreen onNavigate={navigate} selectedDates={selectedDates} meetingId={currentMeetingId} userName={userName} meeting={meetings.find(m=>m.id===currentMeetingId)} />;
       case SCREENS.TIME_RESULT:     return <TimeResultScreen onNavigate={navigate} onConfirmTime={confirmTime} isEditing={meetings.find(m=>m.id===currentMeetingId)?.step==="done"} meeting={meetings.find(m=>m.id===currentMeetingId)} />;
       case SCREENS.PLACE_SELECT:    return <PlaceSelectScreen onNavigate={navigate} candidates={candidates} setCandidates={setCandidates} placeVotes={placeVotes} setPlaceVotes={setPlaceVotes} onConfirmPlace={confirmPlace} isEditing={meetings.find(m=>m.id===currentMeetingId)?.step==="done"} />;
-      case SCREENS.PLACE_RECOMMEND: return <PlaceRecommendScreen onNavigate={navigate} />;
+      case SCREENS.PLACE_RECOMMEND: return <PlaceRecommendScreen onNavigate={navigate} meeting={meetings.find(m=>m.id===currentMeetingId)} meetingId={currentMeetingId} userName={userName} />;
       case SCREENS.DETAIL:          return <DetailScreen onNavigate={navigate} meeting={meetings.find(m=>m.id===currentMeetingId)} restVoted={restVoted} setRestVoted={setRestVoted} />;
       case SCREENS.REST_VOTE:       return <RestVoteScreen onNavigate={navigate} setRestVoted={setRestVoted} meeting={meetings.find(m=>m.id===currentMeetingId)} userName={userName} onResetMeeting={async () => {
   const db = window.db;
