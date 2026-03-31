@@ -441,6 +441,7 @@ function TimeSelectScreen({ onNavigate, selectedDates, meetingId, userName, meet
 
   // 다른 참가자들이 선택한 날짜 추출
   const availability = meeting ? (meeting.availability || {}) : {};
+  console.log("[TimeSelect] meeting:", meeting?.id, "availability:", availability);
   const friendDateSet = new Set();
   Object.values(availability).forEach(slots => {
     (slots || []).forEach(key => {
@@ -525,7 +526,9 @@ function TimeSelectScreen({ onNavigate, selectedDates, meetingId, userName, meet
     dragStartRef.current = null;
   };
 
-  const COL_W = 54;
+  const colCount = allDateKeys.length;
+  const COL_W = colCount === 1 ? 260 : colCount === 2 ? 130 : colCount === 3 ? 88 : colCount === 4 ? 70 : 54;
+  const CELL_H = colCount <= 2 ? 42 : 34;
   const TIME_W = 50;
 
   return (
@@ -567,7 +570,7 @@ function TimeSelectScreen({ onNavigate, selectedDates, meetingId, userName, meet
                     onPointerDown={selectable ? (e) => handlePointerDown(e, di, ti, cellKey) : undefined}
                     style={{
                       width:`${COL_W - 3}px`,
-                      height:"34px",
+                      height:`${CELL_H}px`,
                       margin:"1px 1.5px",
                       flexShrink:0,
                       borderRadius:"5px",
