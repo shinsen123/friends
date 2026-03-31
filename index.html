@@ -1121,7 +1121,8 @@ function PlaceRecommendScreen({ onNavigate, meeting, meetingId, userName }) {
   const locations = meeting ? (meeting.locations || {}) : {};
   const myLocation = locations[userName] || null;
 
-  const [phase, setPhase] = useState(myLocation ? 'result' : 'setup');
+  // 항상 setup부터 시작 (날짜/시간과 동일한 흐름)
+  const [phase, setPhase] = useState('setup');
   const [query, setQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [selected, setSelected] = useState(null);
@@ -1133,16 +1134,14 @@ function PlaceRecommendScreen({ onNavigate, meeting, meetingId, userName }) {
 
   const COLORS = ["#FF6B4A","#7C5CFC","#00C9A7","#FFB800","#FF3CAC","#4A90E2"];
 
-  // 집 위치 불러오기
+  // 이전에 제출한 위치 or 집 위치 미리 채우기
   useEffect(() => {
-    if (myLocation) { setPhase('result'); return; }
-    const home = localStorage.getItem('moim_home_location');
-    if (home) {
-      try {
-        const parsed = JSON.parse(home);
-        setSelected(parsed);
-        setQuery(parsed.address);
-      } catch(e) {}
+    const prefill = myLocation || (() => {
+      try { return JSON.parse(localStorage.getItem('moim_home_location')); } catch(e) { return null; }
+    })();
+    if (prefill) {
+      setSelected(prefill);
+      setQuery(prefill.name || prefill.address);
     }
   }, []);
 
@@ -1199,14 +1198,27 @@ function PlaceRecommendScreen({ onNavigate, meeting, meetingId, userName }) {
         <Header title="출발지 설정" onBack={() => onNavigate(SCREENS.PLACE_SELECT)} />
         <div style={{ flex:1, overflowY:"auto", padding:"0 20px 24px" }}>
 
-          {/* 안내 */}
-          <div style={{ background:"rgba(255,107,74,0.08)", borderRadius:"14px", padding:"14px 16px", marginBottom:"20px", display:"flex", gap:"10px", alignItems:"flex-start" }}>
-            <span style={{ fontSize:"20px" }}>🏠</span>
-            <div>
-              <div style={{ fontSize:"13px", fontWeight:700, color:"var(--accent)", marginBottom:"3px" }}>집 위치를 등록하면 편해요</div>
-              <div style={{ fontSize:"12px", color:"var(--text-secondary)", lineHeight:1.5 }}>한 번 등록해두면 다음 모임에서도 자동으로 사용돼요</div>
+          {/* 이미 제출한 경우 안내 */}
+          {myLocation && (
+            <div style={{ background:"rgba(0,201,167,0.1)", borderRadius:"14px", padding:"12px 16px", marginBottom:"12px", display:"flex", gap:"10px", alignItems:"center" }}>
+              <span style={{ fontSize:"18px" }}>✅</span>
+              <div>
+                <div style={{ fontSize:"13px", fontWeight:700, color:"#00C9A7", marginBottom:"2px" }}>이미 출발지를 등록했어요</div>
+                <div style={{ fontSize:"11px", color:"var(--text-secondary)" }}>{myLocation.name || myLocation.address} · 변경하려면 다시 검색하세요</div>
+              </div>
             </div>
-          </div>
+          )}
+
+          {/* 안내 */}
+          {!myLocation && (
+            <div style={{ background:"rgba(255,107,74,0.08)", borderRadius:"14px", padding:"14px 16px", marginBottom:"20px", display:"flex", gap:"10px", alignItems:"flex-start" }}>
+              <span style={{ fontSize:"20px" }}>🏠</span>
+              <div>
+                <div style={{ fontSize:"13px", fontWeight:700, color:"var(--accent)", marginBottom:"3px" }}>집 위치를 등록하면 편해요</div>
+                <div style={{ fontSize:"12px", color:"var(--text-secondary)", lineHeight:1.5 }}>한 번 등록해두면 다음 모임에서도 자동으로 사용돼요</div>
+              </div>
+            </div>
+          )}
 
           {/* 검색 */}
           <div style={{ fontSize:"12px", fontWeight:700, color:"var(--text-secondary)", marginBottom:"8px" }}>출발지 검색</div>
